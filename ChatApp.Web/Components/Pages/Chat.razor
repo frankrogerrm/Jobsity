@@ -1,0 +1,243 @@
+﻿@page "/chat"
+@page "/chat/{RoomId:int}"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using ChatApp.Web.Services
+@using ChatApp.Shared.Models
+@inject NavigationManager Navigation
+@inject IChatService ChatService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@implements IAsyncDisposable
+@attribute [Authorize]
+
+<PageTitle>Chat Room</PageTitle>
+
+<div class="container-fluid mt-4">
+    <div class="row">
+        <!-- Sidebar con salas de chat -->
+        <div class="col-md-3">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5>Chat Rooms</h5>
+                </div>
+                <div class="list-group list-group-flush">
+                    @foreach (var room in chatRooms)
+                    {
+                        <a href="/chat/@room.Id"
+                           class="list-group-item list-group-item-action @(room.Id == RoomId ? "active" : "")">
+                            @room.Name
+                        </a>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Área de chat -->
+        <div class="col-md-9">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5>@currentRoomName</h5>
+                    <small>@username</small>
+                </div>
+                <div class="card-body" style="height: 500px; overflow-y: auto;" id="chatContainer">
+                    @foreach (var message in messages)
+                    {
+                        <div class="mb-3 @(message.IsBot ? "bot-message" : "")">
+                            <strong class="@(message.IsBot ? "text-info" : "text-primary")">
+                                @message.Username
+                            </strong>
+                            <small class="text-muted">@message.Timestamp.ToLocalTime().ToString("HH:mm:ss")</small>
+                            <div>@message.Message</div>
+                        </div>
+                    }
+                </div>
+                <div class="card-footer">
+                    @if (!string.IsNullOrEmpty(statusMessage))
+                    {
+                        <div class="alert alert-info py-1 mb-2">@statusMessage</div>
+                    }
+                    @if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        <div class="alert alert-danger py-1 mb-2">@errorMessage</div>
+                    }
+                    <div class="input-group">
+                        <input @bind="messageInput"
+                               @bind:event="oninput"
+                               @onkeypress="HandleKeyPress"
+                               class="form-control"
+                               placeholder="Type a message or /stock=CODE..."
+                               disabled="@IsDisabled" />
+                        <button class="btn btn-primary" @onclick="Send" disabled="@IsDisabled">
+                            <i class="bi bi-send"></i> Send
+                        </button>
+                    </div>
+                    <small class="text-muted">
+                        Commands: <code>/stock=AAPL.US</code> to get stock quotes
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .bot-message {
+        background-color: #f0f8ff;
+        padding: 8px;
+        border-radius: 5px;
+        border-left: 3px solid #17a2b8;
+    }
+</style>
+
+@code {
+    [Parameter]
+    public int RoomId { get; set; } = 0;
+
+    private HubConnection? hubConnection;
+    private List<MessageDto> messages = new();
+    private List<ChatRoom> chatRooms = new();
+    private string messageInput = "";
+    private string username = "";
+    private string currentRoomName = "";
+    private string statusMessage = "";
+    private string errorMessage = "";
+
+    private class MessageDto
+    {
+        public string Username { get; set; } = "";
+        public string Message { get; set; } = "";
+        public DateTime Timestamp { get; set; }
+        public bool IsBot { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Redirigir a /chat/1 si no hay RoomId en la URL
+        if (RoomId == 0)
+        {
+            Navigation.NavigateTo("/chat/1");
+            return;
+        }
+
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        username = authState.User.Identity?.Name ?? "Anonymous";
+
+        chatRooms = await ChatService.GetChatRoomsAsync();
+        UpdateRoomName();
+
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/chathub"))
+            .WithAutomaticReconnect()
+            .Build();
+
+        hubConnection.On<string, string, DateTime, bool>("ReceiveMessage", (user, message, timestamp, isBot) =>
+        {
+            messages.Add(new MessageDto
+            {
+                Username = user,
+                Message = message,
+                Timestamp = timestamp,
+                IsBot = isBot
+            });
+
+            // Mantener solo últimos 50 mensajes en memoria
+            if (messages.Count > 50)
+            {
+                messages.RemoveAt(0);
+            }
+
+            InvokeAsync(StateHasChanged);
+        });
+
+        hubConnection.On<string>("CommandProcessed", (message) =>
+        {
+            statusMessage = message;
+            InvokeAsync(StateHasChanged);
+            Task.Delay(3000).ContinueWith(_ =>
+            {
+                statusMessage = "";
+                InvokeAsync(StateHasChanged);
+            });
+        });
+
+        hubConnection.On<string>("Error", (error) =>
+        {
+            errorMessage = error;
+            InvokeAsync(StateHasChanged);
+            Task.Delay(5000).ContinueWith(_ =>
+            {
+                errorMessage = "";
+                InvokeAsync(StateHasChanged);
+            });
+        });
+
+        await hubConnection.StartAsync();
+        await JoinCurrentRoom();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (hubConnection?.State == HubConnectionState.Connected)
+        {
+            await LeaveAllRooms();
+            await JoinCurrentRoom();
+        }
+        UpdateRoomName();
+    }
+
+    private void UpdateRoomName()
+    {
+        currentRoomName = chatRooms.FirstOrDefault(r => r.Id == RoomId)?.Name ?? "Unknown Room";
+    }
+
+    private async Task JoinCurrentRoom()
+    {
+        messages.Clear();
+        await hubConnection!.SendAsync("JoinRoom", RoomId);
+    }
+
+    private async Task LeaveAllRooms()
+    {
+        foreach (var room in chatRooms)
+        {
+            await hubConnection!.SendAsync("LeaveRoom", room.Id);
+        }
+    }
+
+    private async Task Send()
+    {
+        if (!string.IsNullOrWhiteSpace(messageInput) && IsConnected)
+        {
+            try
+            {
+                await hubConnection!.SendAsync("SendMessage", messageInput, RoomId);
+                messageInput = "";
+            }
+            catch (Exception ex)
+            {
+                errorMessage = "Failed to send message. Please try again.";
+            }
+        }
+    }
+
+    private async Task HandleKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            await Send();
+        }
+    }
+
+    private bool IsConnected => hubConnection?.State == HubConnectionState.Connected;
+    private bool IsDisabled => !IsConnected;
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
+    }
+}

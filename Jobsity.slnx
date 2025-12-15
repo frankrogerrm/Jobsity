@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="ChatApp.Shared/ChatApp.Shared.csproj" Id="9e1dad01-3d41-448f-b301-0a6a5bcc0f13" />
+  <Project Path="ChatApp.StockBot/ChatApp.StockBot.csproj" Id="9be6ca42-ab4f-46eb-ae14-20ffd4a0b3b5" />
+  <Project Path="ChatApp.Tests/ChatApp.Tests.csproj" Id="8abd4338-5189-4c26-961d-c57248329e49" />
+  <Project Path="ChatApp.Web/ChatApp.Web.csproj" Id="02cdae58-8ca2-42c5-8627-c231b054d921" />
+</Solution>
