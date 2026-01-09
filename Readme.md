@@ -1,4 +1,4 @@
-﻿# 💬 Jobsity - .NET Chat Challenge
+﻿# 💬 .NET Chat 
 
 **Real-time chat application with stock quotes integration using .NET, Blazor, SignalR, and RabbitMQ**
 
